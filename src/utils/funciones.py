@@ -1,62 +1,66 @@
-
+import os
+import numpy as np
 import pandas as pd
-import xml.etree.ElementTree as ET
-import re
-from nltk.corpus import stopwords
-from nltk.stem.snowball import SnowballStemmer
 
-def read_data(path):
+def get_df(path, measure):
     '''
-    Lee los datos en formato xml del path data/raw
+    Lee los datos de las distintas fuentes de datos y devuelve un df
     '''
-    tree = ET.parse(path)
-    root = tree.getroot()
-    raw_dict = {
-    'User': [],
-    'Content': [],
-    'Date': [],
-    'Lang': [],
-    'Polarity': [],
-    'Type': []
-    }
 
-    for i in root.iter('tweet'):
-        user = i.find('user').text
-        content = i.find('content').text
-        date = i.find('date').text
-        lang = i.find('lang').text
-        polarity = i.find('sentiments').find('polarity').find('value').text
-        tweet_type = i.find('sentiments').find('polarity').find('type').text
-        
-        raw_dict['User'].append(user)
-        raw_dict['Content'].append(content)
-        raw_dict['Date'].append(date)
-        raw_dict['Lang'].append(lang)
-        raw_dict['Polarity'].append(polarity)
-        raw_dict['Type'].append(tweet_type)
-        
-    df = pd.DataFrame(raw_dict)
-    return df
+    # Get poits
+    points_df = pd.read_excel(path + 'PointsMapping.ods', engine='odf', index_col=0)
+
+    # Get smartphone sensor data
+    sensor_sphone_df = pd.read_csv(path + measure + '_smartphone_sens.csv')
+    sensor_sphone_df.columns = sensor_sphone_df.columns.str.strip()
+
+    # Get timestamp
+    timestamp_df = pd.read_csv(path + measure + '_timestamp_id.csv',
+                              header=None, names=['arrival_ts', 'departure_ts', 'place_id'])
+
+    # Join sensor and timestamp
+    sensor_sphone_df['place_id'] = sensor_sphone_df['timestamp'].apply(
+        lambda x: return_place_id(timestamp_df, x))
+    # Drop nulls
+    sensor_sphone_df.dropna(axis=0, inplace=True)
+    # Convert to int
+    sensor_sphone_df['place_id'] = sensor_sphone_df['place_id'].apply(lambda x: int(x))
+
+    # Get WIFI data
+    col = [f'WAP{str(num).zfill(3)}' for num in range(1, 128)]
+    wifi_df = pd.read_csv(path + measure + '_smartphone_wifi.csv',
+                              header=None, names=col)
+    wifi_df.index.name = 'id'
+    wifi_df.index = range(1,326)
+
+    # Join WIFI signal with sensor signals             
+    wifi_df = wifi_df.reset_index()
+    wifi_df.rename(columns={'index': 'place_id'}, inplace=True)    
+    signals = wifi_df.copy()
+    signals = signals.merge(sensor_sphone_df[['MagneticFieldX', 'MagneticFieldY', 'MagneticFieldZ', 'place_id']])
+
+    # Add coordinates
+    signals['x'] = [points_df.loc[id, 'X'] for id in signals.place_id]
+    signals['y'] = [points_df.loc[id, 'Y'] for id in signals.place_id]
+
+    # Drop duplicates
+    print("Length original", len(signals))
+    print("Length duplicates:", signals[signals.duplicated()].shape[0])
+    signals = signals.drop_duplicates(keep = 'last')
+    print("Length without duplicates:", len(signals), '\n')
+
+    return signals
 
 
-def signs_tweets(tweet):
-    signos = re.compile("(\.)|(\;)|(\:)|(\!)|(\?)|(\¿)|(\@)|(\,)|(\")|(\()|(\))|(\[)|(\])|(\d+)")
-    return signos.sub('', tweet.lower())
-
-
-def remove_links(df):
-    return " ".join(['{link}' if ('http') in word else word for word in df.split()])
-
-def remove_stopwords(df):
-    spanish_stopwords = stopwords.words('spanish')
-    return " ".join([word for word in df.split() if word not in spanish_stopwords])
-
-def spanish_stemmer(x):
-    stemmer = SnowballStemmer('spanish')
-    return " ".join([stemmer.stem(word) for word in x.split()])
-
-def polaridad_fun(x):
-    if x in ('P', 'P+'):
-        return 0
-    elif x in ('N', 'N+'):
-        return 1
+def return_place_id(timestamp_df, timestamp):
+    '''
+    Devuelte el id del lugar en el que se encuentra en un momento dado.
+    En caso de no encontrar un cajón devuelve None
+    '''
+    selected = timestamp_df[(timestamp_df.arrival_ts <= timestamp) &
+             (timestamp_df.departure_ts >= timestamp)]
+    if selected.shape[0] == 0:
+        return None
+    else:
+        return timestamp_df[(timestamp_df.arrival_ts <= timestamp) &
+             (timestamp_df.departure_ts >= timestamp)].iloc[0]['place_id']

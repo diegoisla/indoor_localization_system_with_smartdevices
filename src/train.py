@@ -1,67 +1,73 @@
-from utils.funciones import *
-import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer
-
-from sklearn.svm import LinearSVC
-from sklearn.pipeline import Pipeline
-import pickle
 import os
+import pandas as pd
+import numpy as np
 
-print("Comienza el el script train.py")
-print(str(os.getcwd()))
+from utils.funciones import *
 
-df = read_data('data/raw/general-train-tagged.xml')
+import pickle
+from sklearn.preprocessing import StandardScaler
+from sklearn.utils import shuffle           
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_absolute_error
 
-# df2 = read_data('data/raw/general-train-tagged.xml')
-# df3 = read_data('data/raw/general-train-tagged.xml')
-# joins...
+print("\nComienza el script train.py\n")
 
-# df_final
+# Constantes
+# ROOT_PATH = os.path.abspath('.')
+ROOT_PATH = os.path.dirname(os.path.abspath(__file__))
+RAW_DATA_PATH = ROOT_PATH + '\\data\\raw\\'
+PROC_DATA_PATH = ROOT_PATH + '\\data\\proc\\'
 
-# Filtramos vacíos y neutros
-df = df[~df['Polarity'].isin(['NONE', 'NEU'])]
+# Get dataframe
+measure = 'measure1'
+print('Cargando datos')
+df = get_df(RAW_DATA_PATH, measure)
+print('Datos cargados\n')
 
-# Transformamos variable target
-df['Polarity'] = df['Polarity'].apply(polaridad_fun)
+# Save dataframe 
+print("Se empiezan a procesar los datos")
+df.to_excel(PROC_DATA_PATH + measure + '_wifi_smartphone.xlsx')
+print("Datos procesados")
+print("Se guardan los datos procesados\n")
 
-# Eliminamos los no españoles
-df = df[df['Lang'] == 'es']
+# Split labels and features
+X = df.iloc[:,1:-2]
+y = df.iloc[:,-2:]
 
-# Eliminamos los duplicados
-df.drop_duplicates(subset = 'Content', inplace=True)
+# Suffle data
+X, y = shuffle(X, y, random_state=44)
 
-# Eliminamos signos puntuación
-df['Content'] = df['Content'].apply(signs_tweets)
+# Split train test
+X_train, X_test, y_train, y_test = train_test_split(X,
+                                                    y,
+                                                    test_size=0.2,
+                                                    random_state=44)
 
-# Eliminamos links
-df['Content'] = df['Content'].apply(remove_links)
+# Build pipeline
+pipeline = Pipeline(steps=[
+                            ("scaler",StandardScaler()),
+                            ('knn', KNeighborsRegressor(n_neighbors=3, weights='distance'))
+                            ])
 
-# Nos cargamos stopwords
-df['Content'] = df['Content'].apply(remove_stopwords)
+# Train model
+print("Se empieza a entrenar el modelo\n")
+pipeline.fit(X_train, y_train)
 
-# Aplicamos el Stemmer
-df['Content'] = df['Content'].apply(spanish_stemmer)
-
-df = df[['Content', 'Polarity']]
-
-df.to_csv('data\\processed\\data_processed.csv')
-
-# X_train, X_test..... split
-
-pipeline = Pipeline(steps=[('vect',
-                 CountVectorizer(max_df=0.5, max_features=1000, min_df=10,
-                                 ngram_range=(1, 2))),
-                ('cls', LinearSVC(C=0.2, max_iter=500))])
-
-pipeline.fit(df['Content'], df['Polarity'])
-
-with open('model\\selected_models\\finished_model.model', "wb") as archivo_salida:
+with open(ROOT_PATH + '\\model\\selected_models\\finished_model.model', "wb") as archivo_salida:
     pickle.dump(pipeline, archivo_salida)
 
-# predictions = pipeline.predict(X_test)
-# accuracy = accuracy_score(y_test, predictions)
-# scores_df = scores....
-# scores_df.to_csv('data\\metrics\\scores.csv')
-# print(scores_df)
+predictions = pipeline.predict(X_test)
+print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+print("Resultados:")
+print("MSE:  %.7f " % mean_squared_error(y_test, predictions))
+print("RMSE: %.5f " % np.sqrt(mean_squared_error(y_test, predictions)))
+print("MAE:  %.5f " % mean_absolute_error(y_test, predictions))
+print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
 
-print('Finished train.py')
+# # scores_df = scores....
+# # scores_df.to_csv('data\\metrics\\scores.csv')
+
+print('\nFin de train.py\n')
